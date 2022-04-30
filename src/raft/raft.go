@@ -17,14 +17,16 @@ package raft
 //   in the same server.
 //
 
-import "sync"
-import "sync/atomic"
-import "../labrpc"
+import (
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"../labrpc"
+)
 
 // import "bytes"
 // import "../labgob"
-
-
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -53,6 +55,24 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
+	electionTimeout time.Time
+
+	role  Role
+	votes int
+
+	currentTerm int
+	votedFor    int
+	log         LogEntries
+
+	commitIndex int
+	lastApplied int
+
+	nextIndex  []int
+	matchIndex []int
+
+	applyCh   chan ApplyMsg
+	applyCond *sync.Cond
+
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -63,111 +83,11 @@ type Raft struct {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
-	var term int
-	var isleader bool
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	// Your code here (2A).
-	return term, isleader
+	return rf.currentTerm, rf.role == Leader
 }
-
-//
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
-//
-func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
-}
-
-
-//
-// restore previously persisted state.
-//
-func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
-		return
-	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
-}
-
-
-
-
-//
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-//
-type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
-}
-
-//
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
-//
-type RequestVoteReply struct {
-	// Your data here (2A).
-}
-
-//
-// example RequestVote RPC handler.
-//
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
-}
-
-//
-// example code to send a RequestVote RPC to a server.
-// server is the index of the target server in rf.peers[].
-// expects RPC arguments in args.
-// fills in *reply with RPC reply, so caller should
-// pass &reply.
-// the types of the args and reply passed to Call() must be
-// the same as the types of the arguments declared in the
-// handler function (including whether they are pointers).
-//
-// The labrpc package simulates a lossy network, in which servers
-// may be unreachable, and in which requests and replies may be lost.
-// Call() sends a request and waits for a reply. If a reply arrives
-// within a timeout interval, Call() returns true; otherwise
-// Call() returns false. Thus Call() may not return for a while.
-// A false return can be caused by a dead server, a live server that
-// can't be reached, a lost request, or a lost reply.
-//
-// Call() is guaranteed to return (perhaps after a delay) *except* if the
-// handler function on the server side does not return.  Thus there
-// is no need to implement your own timeouts around Call().
-//
-// look at the comments in ../labrpc/labrpc.go for more details.
-//
-// if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
-//
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
-}
-
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -184,14 +104,52 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	// Your code here (2B).
+	if rf.role != Leader {
+		return -1, rf.currentTerm, false
+	}
 
+	e := Entry{command, rf.currentTerm}
+	rf.log.Append(e)
+	rf.persist()
 
-	return index, term, isLeader
+	rf.sendAppendsL()
+
+	index := rf.log.LastIndex()
+	DPrintf("[S%v]: Start %v %v", rf.me, index, e)
+	return index, rf.currentTerm, true
+}
+
+func (rf *Raft) applier() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.lastApplied = 0
+	if rf.lastApplied < rf.log.FirstIndex() {
+		rf.lastApplied = rf.log.FirstIndex()
+	}
+
+	for rf.killed() == false {
+		// All Servers: 1
+		if rf.commitIndex > rf.lastApplied && rf.lastApplied+1 <= rf.log.LastIndex() && rf.lastApplied+1 >= rf.log.FirstIndex() {
+			rf.lastApplied += 1
+			e := rf.log.GetAt(rf.lastApplied)
+			var msg ApplyMsg
+			msg.Command = e.Command
+			msg.CommandIndex = rf.lastApplied
+			msg.CommandValid = true
+			DPrintf("[S%v]: Apply %v %v", rf.me, rf.lastApplied, &e)
+			rf.mu.Unlock()
+			rf.applyCh <- msg
+			rf.mu.Lock()
+		} else {
+			rf.applyCond.Wait()
+		}
+	}
 }
 
 //
@@ -234,10 +192,22 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.role = Follower
+	rf.votedFor = -1
+
+	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
+
+	rf.log = makeLogEntriesEmpty()
+
+	rf.applyCh = applyCh
+	rf.applyCond = sync.NewCond(&rf.mu)
+
+	go rf.startTick()
+	go rf.applier()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
 
 	return rf
 }
