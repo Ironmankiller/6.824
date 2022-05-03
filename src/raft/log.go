@@ -32,12 +32,22 @@ func (logs *LogEntries) GetAt(index int) Entry {
 	return logs.Entries[index-logs.Index0]
 }
 
+func (logs *LogEntries) Get(left int, right int) []Entry {
+	return logs.Entries[left-logs.Index0 : right-logs.Index0]
+}
+
 func (logs *LogEntries) Splice(index int) []Entry {
 	return logs.Entries[index-logs.Index0:]
 }
 
 func (logs *LogEntries) Append(e Entry) {
 	logs.Entries = append(logs.Entries, e)
+}
+
+func (logs *LogEntries) AppendAfterIndex(index int, entrys []Entry) {
+
+	logs.Entries = append(logs.Entries[:index-logs.Index0], entrys...)
+	logs.Entries = append([]Entry{}, logs.Entries...)
 }
 
 // erase the log entry before a specific index (not include index)
@@ -52,8 +62,8 @@ func (logs *LogEntries) EraseAfter(index int) {
 
 // add an dummy entry
 func makeLogEntriesEmpty() LogEntries {
-	var emptyEntry Entry
 	var logEntries LogEntries
-	logEntries.Entries = append(logEntries.Entries, emptyEntry)
+	logEntries.Index0 = 0
+	logEntries.Entries = make([]Entry, 1)
 	return logEntries
 }

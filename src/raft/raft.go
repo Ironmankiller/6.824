@@ -73,6 +73,8 @@ type Raft struct {
 	applyCh   chan ApplyMsg
 	applyCond *sync.Cond
 
+	replicatorCond []*sync.Cond
+
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -117,7 +119,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.log.Append(e)
 	rf.persist()
 
-	rf.sendAppendsL()
+	rf.sendAppendsL(false)
 
 	index := rf.log.LastIndex()
 	DPrintf("[S%v]: Start %v %v", rf.me, index, e)
@@ -125,30 +127,40 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 
 func (rf *Raft) applier() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 
+	rf.mu.Lock()
 	rf.lastApplied = 0
 	if rf.lastApplied < rf.log.FirstIndex() {
 		rf.lastApplied = rf.log.FirstIndex()
 	}
+	rf.mu.Unlock()
 
 	for rf.killed() == false {
+		rf.mu.Lock()
 		// All Servers: 1
-		if rf.commitIndex > rf.lastApplied && rf.lastApplied+1 <= rf.log.LastIndex() && rf.lastApplied+1 >= rf.log.FirstIndex() {
-			rf.lastApplied += 1
-			e := rf.log.GetAt(rf.lastApplied)
-			var msg ApplyMsg
-			msg.Command = e.Command
-			msg.CommandIndex = rf.lastApplied
-			msg.CommandValid = true
-			DPrintf("[S%v]: Apply %v %v", rf.me, rf.lastApplied, &e)
-			rf.mu.Unlock()
-			rf.applyCh <- msg
-			rf.mu.Lock()
-		} else {
+		for rf.commitIndex <= rf.lastApplied {
 			rf.applyCond.Wait()
 		}
+		commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
+		entries := make([]Entry, commitIndex-lastApplied)
+		copy(entries, rf.log.Get(lastApplied+1, commitIndex+1))
+		rf.mu.Unlock()
+		for i, e := range entries {
+			var msg ApplyMsg
+			msg.Command = e.Command
+			msg.CommandIndex = lastApplied + 1 + i
+			msg.CommandValid = true
+			DPrintf("[S%v]: Apply %v %v", rf.me, rf.lastApplied, &e)
+			rf.applyCh <- msg
+		}
+		rf.mu.Lock()
+		// we don't hold lock during push channel operation
+		// avoid concurrently InstallSnapshot rpc causing lastApplied to rollback
+		if rf.lastApplied < commitIndex {
+			// use commitIndex rather than rf.commitIndex because rf.commitIndex may change during the Unlock() and Lock()
+			rf.lastApplied = commitIndex
+		}
+		rf.mu.Unlock()
 	}
 }
 
@@ -186,28 +198,35 @@ func (rf *Raft) killed() bool {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	rf := &Raft{}
-	rf.peers = peers
-	rf.persister = persister
-	rf.me = me
-
-	// Your initialization code here (2A, 2B, 2C).
-	rf.role = Follower
-	rf.votedFor = -1
-
-	rf.nextIndex = make([]int, len(peers))
-	rf.matchIndex = make([]int, len(peers))
-
-	rf.log = makeLogEntriesEmpty()
-
-	rf.applyCh = applyCh
-	rf.applyCond = sync.NewCond(&rf.mu)
-
-	go rf.startTick()
-	go rf.applier()
+	rf := &Raft{
+		peers:          peers,
+		persister:      persister,
+		me:             me,
+		dead:           0,
+		role:           Follower,
+		votedFor:       -1,
+		nextIndex:      make([]int, len(peers)),
+		matchIndex:     make([]int, len(peers)),
+		log:            makeLogEntriesEmpty(), // the first entry is a dummy entry which contains LastSnapshotTerm, LastSnapshotIndex and nil Command
+		applyCh:        applyCh,
+		replicatorCond: make([]*sync.Cond, len(peers)),
+	}
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	rf.applyCond = sync.NewCond(&rf.mu)
+
+	// for interval heartbeat
+	go rf.startTick()
+	// for apply log to high level application
+	go rf.applier()
+	for i := 0; i < len(peers); i++ {
+		if i != rf.me {
+			rf.replicatorCond[i] = sync.NewCond(&sync.Mutex{})
+			// start replicator goroutine to replicate entries in batch
+			go rf.replicator(i)
+		}
+	}
 	return rf
 }

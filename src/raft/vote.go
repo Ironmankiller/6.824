@@ -115,19 +115,21 @@ func (rf *Raft) requestVote(args RequestVoteArgs, server int) {
 
 		DPrintf("[S%v]: RequestVote reply by [S%v] with %v\n", rf.me, server, reply)
 
-		// If AppendEntries RPC received from new leader: convert to follower
-		if reply.Term > args.Term {
-			rf.newTermL(reply.Term)
-		}
-
-		if reply.VoteGranted {
-			rf.votes += 1
-			// If votes received from majority of servers: become leader
-			if rf.votes > len(rf.peers)/2 {
-				if rf.role == Candidate { // 参选者有可能已经发现别的leader，并变成follower了
-					rf.becomeLeader()
-					// Upon election: send initial empty AppendEntries RPCs (heartbeat) to each server
-					rf.sendAppendsL() // 成为leader后立即发送心跳
+		// 参选者有可能已经发现别的leader，并变成follower了
+		if rf.role == Candidate && rf.currentTerm == args.Term {
+			// If AppendEntries RPC received from new leader: convert to follower
+			if reply.Term > args.Term {
+				rf.newTermL(reply.Term)
+			}
+			if reply.VoteGranted {
+				rf.votes += 1
+				// If votes received from majority of servers: become leader
+				if rf.votes > len(rf.peers)/2 {
+					if rf.role == Candidate {
+						rf.becomeLeader()
+						// Upon election: send initial empty AppendEntries RPCs (heartbeat) to each server
+						rf.sendAppendsL(true) // 成为leader后立即发送心跳, but no-op log is better
+					}
 				}
 			}
 		}
@@ -175,7 +177,7 @@ func (rf *Raft) tick() {
 	//  repeat during idle periods to prevent election timeouts
 	if rf.role == Leader {
 		rf.setElectionTimeoutL() // leader不会超时
-		rf.sendAppendsL()
+		rf.sendAppendsL(true)
 	}
 
 	// If election timeout elapses: start new election

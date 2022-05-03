@@ -19,11 +19,10 @@ func (a *AppendEntriesArgs) String() string {
 }
 
 type AppendEntriesReply struct {
-	Term                   int
-	ConflictTerm           int
-	ConflictTermFirstIndex int
-	LastIndex              int
-	Success                bool
+	Term          int
+	ConflictTerm  int
+	ConflictIndex int
+	Success       bool
 }
 
 func (a *AppendEntriesReply) String() string {
@@ -40,71 +39,67 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	rf.setElectionTimeoutL()
+	if args.Term < rf.currentTerm {
+		// AppendEntries Receiver implementation: 1
+		reply.Success = false
+		reply.Term = rf.currentTerm
+		return
+	}
 
 	if args.Term > rf.currentTerm {
 		// All Servers: 1
 		rf.newTermL(args.Term)
 	}
 
-	if args.Term < rf.currentTerm {
-		// AppendEntries Receiver implementation: 1
-		reply.Success = false
-	} else {
-		reply.LastIndex = rf.log.LastIndex()
-		if rf.log.LastIndex() < args.PrevLogIndex {
-			// AppendEntries Receiver implementation: 2
-			reply.Success = false
-			reply.ConflictTerm = -1
-		} else {
-			if rf.log.GetAt(args.PrevLogIndex).Term != args.PrevLogTerm {
-				// AppendEntries Receiver implementation: 3
-				reply.ConflictTerm = rf.log.GetAt(args.PrevLogIndex).Term
-				// get first index of ConflictTerm
-				reply.ConflictTermFirstIndex = args.PrevLogIndex
-				for reply.ConflictTermFirstIndex-1 >= rf.log.FirstIndex() &&
-					rf.log.GetAt(reply.ConflictTermFirstIndex-1).Term == reply.ConflictTerm {
-					reply.ConflictTermFirstIndex -= 1
-				}
-				rf.log.EraseAfter(args.PrevLogIndex)
-				reply.Success = false
-			} else {
+	// 这里有必要设为Follower吗？
+	rf.role = Follower
+	// Follower: 2
+	rf.setElectionTimeoutL()
 
-				for i, e := range args.Entries {
-					// AppendEntries Receiver implementation: 4
-					if args.PrevLogIndex+1+i <= rf.log.LastIndex() {
-						// delete old log and avoid duplicate log
-						// Case:
-						// Me:     1 3 2 2
-						// Leader: 1 3
-						if rf.log.GetAt(args.PrevLogIndex + i + 1).isEqual(e) {
-							// duplicate log
-							continue
-						} else {
-							// old log should be deleted
-							rf.log.EraseAfter(args.PrevLogIndex + i + 1)
-						}
-					}
-					rf.log.Append(e)
-					// DPrintf("[S%v]: %v from [S%v] appended, now %v\n", rf.me, e, args.LeaderId, rf.log)
-				}
-				// AppendEntries Receiver implementation: 5
-				if args.LeaderCommit > rf.commitIndex {
-					rf.commitIndex = args.LeaderCommit
-					lastNewIndex := args.PrevLogIndex + 1 + len(args.Entries) - 1
-					if rf.commitIndex > lastNewIndex {
-						rf.commitIndex = lastNewIndex
-					}
-					rf.applyCond.Broadcast()
-				}
-				reply.Success = true
-			}
+	reply.Success = false
+	if rf.log.LastIndex() < args.PrevLogIndex {
+		// AppendEntries Receiver implementation: 2
+		reply.ConflictTerm = -1
+		reply.ConflictIndex = rf.log.LastIndex() + 1
+	} else if rf.log.GetAt(args.PrevLogIndex).Term != args.PrevLogTerm { // not matched
+		// AppendEntries Receiver implementation: 3
+		reply.ConflictTerm = rf.log.GetAt(args.PrevLogIndex).Term
 
+		// get first index of ConflictTerm
+		index := args.PrevLogIndex
+		for index-1 >= rf.log.FirstIndex() &&
+			rf.log.GetAt(index-1).Term == reply.ConflictTerm {
+			index -= 1
 		}
+		reply.ConflictIndex = index
+	} else {
+		for i, e := range args.Entries {
+			entryIndex := args.PrevLogIndex + 1 + i
+			// it's time to append
+			if entryIndex > rf.log.LastIndex() || !rf.log.GetAt(entryIndex).isEqual(e) {
+				rf.log.AppendAfterIndex(entryIndex, args.Entries[i:])
+				break
+			}
+		}
+		DPrintf("[S%v]: now %v\n", rf.me, rf.log)
+		rf.advanceCommit(args.LeaderCommit)
+		reply.Success = true
 	}
 
 	reply.Term = rf.currentTerm
 	rf.persist()
+}
+
+func (rf *Raft) advanceCommit(leaderCommit int) {
+	// AppendEntries Receiver implementation: 5
+	if leaderCommit > rf.commitIndex {
+		rf.commitIndex = leaderCommit
+		lastNewIndex := rf.log.LastIndex()
+		if rf.commitIndex > lastNewIndex {
+			rf.commitIndex = lastNewIndex
+		}
+		rf.applyCond.Broadcast()
+	}
 }
 
 func (rf *Raft) sendAppendRequest(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -143,7 +138,7 @@ func (rf *Raft) processConflictTermL(server int, args *AppendEntriesArgs, reply 
 		// case 1:
 		// me:     4
 		// leader: 4 6 6 6
-		return reply.LastIndex + 1
+		return reply.ConflictIndex
 	}
 	// check whether conflict term exist in leader's log
 	index := args.PrevLogIndex
@@ -171,7 +166,7 @@ func (rf *Raft) processConflictTermL(server int, args *AppendEntriesArgs, reply 
 			// case 4:
 			// me:     4 5 5
 			// leader: 4 6 6 6
-			return reply.ConflictTermFirstIndex
+			return reply.ConflictIndex
 		}
 	}
 }
@@ -212,7 +207,7 @@ func (rf *Raft) sendAppendL(server int) {
 		next = rf.log.LastIndex()
 	}
 
-	if next-1 < rf.log.FirstIndex() {
+	if next-1 < rf.log.FirstIndex() { // it's time to send a snapshot
 		next = rf.log.FirstIndex() + 1
 	}
 
@@ -239,12 +234,75 @@ func (rf *Raft) sendAppendL(server int) {
 
 }
 
+func (rf *Raft) sendAppend(server int) {
+
+	rf.mu.Lock()
+	// must check the role there, because becoming follower and sendAppend is concurrent
+	if rf.role != Leader {
+		rf.mu.Unlock()
+		return
+	}
+	next := rf.nextIndex[server]
+
+	if next > rf.log.LastIndex()+1 {
+		next = rf.log.LastIndex()
+	}
+
+	if next-1 < rf.log.FirstIndex() { // it's time to send a snapshot
+		next = rf.log.FirstIndex() + 1
+	}
+
+	args := AppendEntriesArgs{
+		rf.currentTerm,
+		rf.me,
+		next - 1,
+		rf.log.GetAt(next - 1).Term,
+		make([]Entry, rf.log.LastIndex()-next+1),
+		rf.commitIndex,
+	}
+	copy(args.Entries, rf.log.Splice(next))
+
+	rf.mu.Unlock()
+	DPrintf("[S%v]: AppendRequest send to [S%v] with %v", rf.me, server, &args)
+	var reply AppendEntriesReply
+	ok := rf.sendAppendRequest(server, &args, &reply)
+	if ok {
+		rf.mu.Lock()
+		rf.handleAppendReplyL(server, &args, &reply)
+		rf.mu.Unlock()
+	}
+}
+
 // heartbeat and append entries
-func (rf *Raft) sendAppendsL() {
+func (rf *Raft) sendAppendsL(isHeartBeat bool) {
 
 	for i, _ := range rf.peers {
-		if i != rf.me {
-			rf.sendAppendL(i)
+		if i == rf.me {
+			continue
+		}
+		if isHeartBeat {
+			go rf.sendAppend(i)
+		} else {
+			rf.replicatorCond[i].Broadcast()
 		}
 	}
+}
+
+func (rf *Raft) replicator(peer int) {
+	rf.replicatorCond[peer].L.Lock()
+	defer rf.replicatorCond[peer].L.Unlock()
+
+	for rf.killed() == false {
+		for !rf.needReplicating(peer) {
+			rf.replicatorCond[peer].Wait()
+		}
+		rf.sendAppend(peer)
+	}
+}
+
+func (rf *Raft) needReplicating(peer int) bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	DPrintf("[S%v]: matchIndex[%v]=%v rf.log %v index %v", rf.me, peer, rf.matchIndex[peer], rf.log, rf.log.LastIndex())
+	return rf.role == Leader && rf.matchIndex[peer] < rf.log.LastIndex()
 }
