@@ -3,7 +3,7 @@ package raft
 import (
 	"bytes"
 
-	"../labgob"
+	"ds/labgob"
 )
 
 type PersistStatus struct {

@@ -1,13 +1,19 @@
 package kvraft
 
-import "../labrpc"
+import (
+	"ds/labrpc"
+	"sync"
+)
 import "crypto/rand"
 import "math/big"
 
-
 type Clerk struct {
+	mu      sync.Mutex
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	leaderId  int
+	clientId  int64
+	commandId int
 }
 
 func nrand() int64 {
@@ -20,45 +26,39 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.clientId = nrand()
+	ck.commandId = 0
 	// You'll have to add code here.
 	return ck
 }
 
-//
-// fetch the current value for a key.
-// returns "" if the key does not exist.
-// keeps trying forever in the face of all other errors.
-//
-// you can send an RPC with code like this:
-// ok := ck.servers[i].Call("KVServer.Get", &args, &reply)
-//
-// the types of args and reply (including whether they are pointers)
-// must match the declared types of the RPC handler function's
-// arguments. and reply must be passed as a pointer.
-//
-func (ck *Clerk) Get(key string) string {
+func (ck *Clerk) CommandExcute(args *CommandArgs) string {
 
-	// You will have to modify this function.
-	return ""
+	args.CommandId = ck.commandId
+	args.ClientId = ck.clientId
+	var reply CommandReply
+	for {
+		DPrintf("[C%v]: send command %v to [S%v]\n", ck.clientId, args, ck.leaderId)
+		success := ck.servers[ck.leaderId].Call("KVServer.Command", args, &reply)
+
+		if !success || reply.Err == ErrWrongLeader || reply.Err == ErrTimeout {
+			// select a random kv server to send rpc
+			ck.leaderId = (ck.leaderId + 1) % len(ck.servers)
+			continue
+		}
+		DPrintf("[C%v]: receive %v %v from %v commandId %v\n", ck.clientId, reply.Err, reply.Value, ck.leaderId, ck.commandId)
+		ck.commandId += 1
+		return reply.Value
+	}
 }
 
-//
-// shared by Put and Append.
-//
-// you can send an RPC with code like this:
-// ok := ck.servers[i].Call("KVServer.PutAppend", &args, &reply)
-//
-// the types of args and reply (including whether they are pointers)
-// must match the declared types of the RPC handler function's
-// arguments. and reply must be passed as a pointer.
-//
-func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
+func (ck *Clerk) Get(key string) string {
+	return ck.CommandExcute(&CommandArgs{Key: key, Op: "Get"})
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.CommandExcute(&CommandArgs{Key: key, Value: value, Op: "Put"})
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.CommandExcute(&CommandArgs{Key: key, Value: value, Op: "Append"})
 }

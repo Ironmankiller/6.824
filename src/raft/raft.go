@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"../labrpc"
+	"ds/labrpc"
 )
 
 // import "bytes"
@@ -43,6 +43,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int
 }
 
 //
@@ -150,8 +151,9 @@ func (rf *Raft) applier() {
 			msg.Command = e.Command
 			msg.CommandIndex = lastApplied + 1 + i
 			msg.CommandValid = true
-			DPrintf("[S%v]: Apply %v %v", rf.me, rf.lastApplied, &e)
+			msg.CommandTerm = e.Term
 			rf.applyCh <- msg
+			DPrintf("[S%v]: Apply %v %v", rf.me, rf.lastApplied, &e)
 		}
 		rf.mu.Lock()
 		// we don't hold lock during push channel operation

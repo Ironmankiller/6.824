@@ -303,6 +303,6 @@ func (rf *Raft) replicator(peer int) {
 func (rf *Raft) needReplicating(peer int) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("[S%v]: matchIndex[%v]=%v rf.log %v index %v", rf.me, peer, rf.matchIndex[peer], rf.log, rf.log.LastIndex())
+	//DPrintf("[S%v]: matchIndex[%v]=%v rf.log %v index %v", rf.me, peer, rf.matchIndex[peer], rf.log, rf.log.LastIndex())
 	return rf.role == Leader && rf.matchIndex[peer] < rf.log.LastIndex()
 }

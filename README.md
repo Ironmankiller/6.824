@@ -1,5 +1,7 @@
 # 6.824 Lab
 
+原先的课程代码是基于GOPATH模式来管理依赖的，但是目前go module已经成为了官方推荐的依赖管理方式，所以我对本项目做了一些修改，在src文件夹下使用go mod init ds命令初始化了项目模块，所以调用src下其他文件夹的代码就不需要再使用类似../mr这种模式，而是ds/mr，这样做的好处是便于在windows下使用goland开发（goland默认使用go module管理依赖，GOPATH模式会编译失败），在linux环境远程运行。
+
 ## Lab1 MapReduce
 
 - [x] Word Count测试
