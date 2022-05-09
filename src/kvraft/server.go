@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	WaitTime = 2000 // ms
+	WaitTime = 1300 // ms
 )
 
 type CommandContext struct {
@@ -28,21 +28,20 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	kvtable    map[string]string
-	notifier   map[int]chan *CommandReply
-	lastResult map[int64]CommandContext
+	statemachine KVStateMachine
+	notifier     map[int]chan *CommandReply
+	lastResult   map[int64]CommandContext
 }
 
 func (kv *KVServer) Command(args *CommandArgs, reply *CommandReply) {
 
-	kv.mu.Lock()
-	ctx, ok := kv.lastResult[args.ClientId]
-	kv.mu.Unlock()
-
-	if ok && ctx.commandId == args.CommandId {
-		reply.Value, reply.Err = ctx.lastReply.Value, ctx.lastReply.Err
+	// process duplication
+	lastReply, ok := kv.checkDuplicate(args.ClientId, args.CommandId)
+	if ok {
+		reply.Err, reply.Value = lastReply.Err, lastReply.Value
 		return
 	}
+
 	index, _, isLeader := kv.rf.Start(*args)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
@@ -50,32 +49,16 @@ func (kv *KVServer) Command(args *CommandArgs, reply *CommandReply) {
 	}
 	DPrintf("[S%v]: command %v started\n", kv.me, args)
 
-	kv.mu.Lock()
-	c := make(chan *CommandReply)
-	kv.notifier[index] = c
-
-	kv.mu.Unlock()
-	DPrintf("[S%v]: started wait %v at %v\n", kv.me, args, index)
+	c := kv.getNotifier(index)
 
 	select {
 	case temp := <-c:
 		reply.Err, reply.Value = temp.Err, temp.Value
-	case <-time.After(WaitTime * time.Millisecond):
+	case <-time.After(WaitTime * time.Millisecond): // timeout is necessary, since request may be sent to minority
 		reply.Err = ErrTimeout
 	}
 
-	go func(index int) {
-		kv.mu.Lock()
-		defer kv.mu.Unlock()
-
-		shorterNotifier := make(map[int]chan *CommandReply)
-		for k, v := range kv.notifier {
-			if k > index {
-				shorterNotifier[k] = v
-			}
-		}
-		kv.notifier = shorterNotifier
-	}(index)
+	go kv.recycleNotifierL(index)
 
 	DPrintf("[S%v]: reply %v to %v\n", kv.me, reply, args.ClientId)
 	return
@@ -84,54 +67,80 @@ func (kv *KVServer) Command(args *CommandArgs, reply *CommandReply) {
 func (kv *KVServer) applier() {
 	for kv.killed() == false {
 		log := <-kv.applyCh
+		command := log.Command.(CommandArgs)
 		DPrintf("[S%v]: applied %v\n", kv.me, log.Command.(CommandArgs))
 
 		if !log.CommandValid {
 			continue
 		}
-		command := log.Command.(CommandArgs)
 
-		kv.mu.Lock()
-		var reply CommandReply
-		ctx, ok := kv.lastResult[command.ClientId]
-		if ok && ctx.commandId == command.CommandId {
-			DPrintf("{Node %v} doesn't apply duplicated message %v to stateMachine because maxAppliedCommandId is %v for client %v", kv.me, command, kv.lastResult[command.ClientId], command.ClientId)
-			reply = ctx.lastReply
-		} else {
-			reply = kv.applyLogToStateMachine(command)
+		// process duplication cased by new leader.
+		reply, ok := kv.checkDuplicate(command.ClientId, command.CommandId)
+		if !ok {
+			kv.mu.Lock()
+			reply = kv.applyLogToStateMachineL(command)
 			kv.lastResult[command.ClientId] = CommandContext{command.CommandId, reply}
+			kv.mu.Unlock()
 		}
-		c := kv.notifier[log.CommandIndex]
-		kv.mu.Unlock()
 
-		currentTerm, isLeader := kv.rf.GetState()
-		DPrintf("[S%v]: isLeader %v currentTerm %v CommandTerm %v\n", kv.me, isLeader, currentTerm, log.CommandTerm)
+		// Check whether this server is real leader. (It may lose leadership before commit)
 		if currentTerm, isLeader := kv.rf.GetState(); isLeader && currentTerm == log.CommandTerm {
 			DPrintf("[S%v]: notify %v\n", kv.me, log.CommandIndex)
+			c := kv.getNotifier(log.CommandIndex)
 			c <- &reply
 		}
 	}
 }
 
-func (kv *KVServer) applyLogToStateMachine(args CommandArgs) CommandReply {
+func (kv *KVServer) applyLogToStateMachineL(args CommandArgs) CommandReply {
 	var reply CommandReply
-	reply.Err = OK
-	reply.Value = ""
 
 	switch args.Op {
 	case GetOp:
-		var ok bool
-		reply.Value, ok = kv.kvtable[args.Key]
-		if !ok {
-			reply.Err = ErrNoKey
-		}
+		reply.Value, reply.Err = kv.statemachine.Get(args.Key)
 	case PutOp:
-		kv.kvtable[args.Key] = args.Value
+		reply.Err = kv.statemachine.Put(args.Key, args.Value)
 	case AppendOp:
-		kv.kvtable[args.Key] += args.Value
+		reply.Err = kv.statemachine.Append(args.Key, args.Value)
 	}
+
 	DPrintf("[S%v]: %v command apply to state machine with %v\n", kv.me, args, reply)
 	return reply
+}
+
+func (kv *KVServer) checkDuplicate(clientId int64, commandId int) (CommandReply, bool) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	ctx, ok := kv.lastResult[clientId]
+	if ok && ctx.commandId == commandId {
+		return ctx.lastReply, true
+	}
+	return CommandReply{}, false
+}
+
+func (kv *KVServer) getNotifier(index int) chan *CommandReply {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	c, ok := kv.notifier[index]
+	if !ok {
+		c = make(chan *CommandReply)
+		kv.notifier[index] = c
+	}
+	return c
+}
+
+func (kv *KVServer) recycleNotifierL(index int) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	shorterNotifier := make(map[int]chan *CommandReply)
+	for k, v := range kv.notifier {
+		if k > index {
+			shorterNotifier[k] = v
+		}
+	}
+	kv.notifier = shorterNotifier
 }
 
 //
@@ -177,7 +186,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := &KVServer{
 		me:           me,
 		maxraftstate: maxraftstate,
-		kvtable:      make(map[string]string),
+		statemachine: NewMemoryKV(),
 		notifier:     make(map[int]chan *CommandReply),
 		lastResult:   make(map[int64]CommandContext),
 	}

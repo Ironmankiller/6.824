@@ -47,12 +47,13 @@ func (logs *LogEntries) Append(e Entry) {
 func (logs *LogEntries) AppendAfterIndex(index int, entrys []Entry) {
 
 	logs.Entries = append(logs.Entries[:index-logs.Index0], entrys...)
-	logs.Entries = append([]Entry{}, logs.Entries...)
+	logs.Entries = append([]Entry{}, logs.Entries...) // some entry has been aborted, we must gc underling array
 }
 
 // erase the log entry before a specific index (not include index)
 func (logs *LogEntries) EraseBefore(index int) {
 	logs.Entries = logs.Entries[index-logs.Index0:]
+	logs.Entries = append([]Entry{}, logs.Entries...) // some entry has been aborted, we must gc underling array
 	logs.Index0 = index
 }
 
