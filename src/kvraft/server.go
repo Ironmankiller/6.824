@@ -64,18 +64,18 @@ func (kv *KVServer) Command(args *CommandArgs, reply *CommandReply) {
 		reply.Err = ErrTimeout
 	}
 
-	//go func(index int) {
-	//	kv.mu.Lock()
-	//	defer kv.mu.Unlock()
-	//
-	//	shorterNotifier := make(map[int]chan *CommandReply)
-	//	for k, v := range kv.notifier {
-	//		if k > index {
-	//			shorterNotifier[k] = v
-	//		}
-	//	}
-	//	kv.notifier = shorterNotifier
-	//}(index)
+	go func(index int) {
+		kv.mu.Lock()
+		defer kv.mu.Unlock()
+
+		shorterNotifier := make(map[int]chan *CommandReply)
+		for k, v := range kv.notifier {
+			if k > index {
+				shorterNotifier[k] = v
+			}
+		}
+		kv.notifier = shorterNotifier
+	}(index)
 
 	DPrintf("[S%v]: reply %v to %v\n", kv.me, reply, args.ClientId)
 	return
