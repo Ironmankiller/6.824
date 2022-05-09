@@ -35,7 +35,7 @@ type KVServer struct {
 
 func (kv *KVServer) Command(args *CommandArgs, reply *CommandReply) {
 
-	// process duplication
+	// detect duplication to avoid raft process
 	lastReply, ok := kv.checkDuplicate(args.ClientId, args.CommandId)
 	if ok {
 		reply.Err, reply.Value = lastReply.Err, lastReply.Value
@@ -74,7 +74,7 @@ func (kv *KVServer) applier() {
 			continue
 		}
 
-		// process duplication cased by new leader.
+		// detect duplication log which has been applied by old leader.
 		reply, ok := kv.checkDuplicate(command.ClientId, command.CommandId)
 		if !ok {
 			kv.mu.Lock()
@@ -83,7 +83,18 @@ func (kv *KVServer) applier() {
 			kv.mu.Unlock()
 		}
 
-		// Check whether this server is real leader. (It may lose leadership before commit)
+		// Check "isLeader==true" means only notify rpc thread whose client is waited on leader server.
+		// "isLeader==false" happens in server lose its leadership before apply. In this case, the rpc will
+		// return a timeout error, and client will choose a new server to retry.
+		// Check "currentTerm == log.CommandTerm" means the leader server only be allowed to notify rpc thread whose
+		// command is started at its term
+		// "currentTerm != log.CommandTerm" happens in server lose its leadership but becomes leader again before
+		// rpc return timeout error. in the case, server's log may be applied by other leader before it become
+		// leader again. So All clients waiting on old leader will get timeout error, and redirect their requests
+		// to new leader.
+		// Notice that if election timeout is larger than client request timeout, "currentTerm != log.CommandTerm"
+		// will never occur, but someone may change election timeout in the future. Just to be safe side, we have to
+		// check "currentTerm == log.CommandTerm"
 		if currentTerm, isLeader := kv.rf.GetState(); isLeader && currentTerm == log.CommandTerm {
 			DPrintf("[S%v]: notify %v\n", kv.me, log.CommandIndex)
 			c := kv.getNotifier(log.CommandIndex)
@@ -119,6 +130,7 @@ func (kv *KVServer) checkDuplicate(clientId int64, commandId int) (CommandReply,
 	return CommandReply{}, false
 }
 
+// getNotifier Return a channel used in rpc and applier thread
 func (kv *KVServer) getNotifier(index int) chan *CommandReply {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
@@ -130,6 +142,7 @@ func (kv *KVServer) getNotifier(index int) chan *CommandReply {
 	return c
 }
 
+// recycleNotifierL An channel can only be used once, release the memory occupied by used channel
 func (kv *KVServer) recycleNotifierL(index int) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
@@ -143,16 +156,6 @@ func (kv *KVServer) recycleNotifierL(index int) {
 	kv.notifier = shorterNotifier
 }
 
-//
-// the tester calls Kill() when a KVServer instance won't
-// be needed again. for your convenience, we supply
-// code to set rf.dead (without needing a lock),
-// and a killed() method to test rf.dead in
-// long-running loops. you can also add your own
-// code to Kill(). you're not required to do anything
-// about this, but it may be convenient (for example)
-// to suppress debug output from a Kill()ed instance.
-//
 func (kv *KVServer) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
@@ -164,20 +167,6 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-//
-// servers[] contains the ports of the set of
-// servers that will cooperate via Raft to
-// form the fault-tolerant key/value service.
-// me is the index of the current server in servers[].
-// the k/v server should store snapshots through the underlying Raft
-// implementation, which should call persister.SaveStateAndSnapshot() to
-// atomically save the Raft state along with the snapshot.
-// the k/v server should snapshot when Raft's saved state exceeds maxraftstate bytes,
-// in order to allow Raft to garbage-collect its log. if maxraftstate is -1,
-// you don't need to snapshot.
-// StartKVServer() must return quickly, so it should start goroutines
-// for any long-running work.
-//
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.

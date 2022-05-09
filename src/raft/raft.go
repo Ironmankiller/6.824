@@ -63,7 +63,7 @@ type Raft struct {
 
 	currentTerm int
 	votedFor    int
-	log         LogEntries
+	log         LogEntries // The first entry is dummy or snapshot's last entry
 
 	commitIndex int
 	lastApplied int
