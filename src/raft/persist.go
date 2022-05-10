@@ -12,6 +12,16 @@ type PersistStatus struct {
 	Log         LogEntries
 }
 
+func (rf *Raft) encodeState() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	status := PersistStatus{rf.currentTerm, rf.votedFor, rf.log}
+	e.Encode(status.CurrentTerm)
+	e.Encode(status.VotedFor)
+	e.Encode(status.Log)
+	return w.Bytes()
+}
+
 //
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
@@ -20,13 +30,7 @@ type PersistStatus struct {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
-	status := PersistStatus{rf.currentTerm, rf.votedFor, rf.log}
-	e.Encode(status.CurrentTerm)
-	e.Encode(status.VotedFor)
-	e.Encode(status.Log)
-	data := w.Bytes()
+	data := rf.encodeState()
 	rf.persister.SaveRaftState(data)
 }
 

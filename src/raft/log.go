@@ -32,6 +32,11 @@ func (logs *LogEntries) GetAt(index int) Entry {
 	return logs.Entries[index-logs.Index0]
 }
 
+func (logs *LogEntries) SetFirst(index int, entry Entry) {
+	logs.Entries[0] = entry
+	logs.Index0 = index
+}
+
 func (logs *LogEntries) Get(left int, right int) []Entry {
 	return logs.Entries[left-logs.Index0 : right-logs.Index0]
 }
@@ -47,13 +52,13 @@ func (logs *LogEntries) Append(e Entry) {
 func (logs *LogEntries) AppendAfterIndex(index int, entrys []Entry) {
 
 	logs.Entries = append(logs.Entries[:index-logs.Index0], entrys...)
-	logs.Entries = append([]Entry{}, logs.Entries...) // some entry has been aborted, we must gc underling array
+	logs.Entries = append(make([]Entry, 0, len(logs.Entries)), logs.Entries...) // some entry has been aborted, we must gc underling array
 }
 
 // erase the log entry before a specific index (not include index)
 func (logs *LogEntries) EraseBefore(index int) {
 	logs.Entries = logs.Entries[index-logs.Index0:]
-	logs.Entries = append([]Entry{}, logs.Entries...) // some entry has been aborted, we must gc underling array
+	logs.Entries = append(make([]Entry, 0, len(logs.Entries)), logs.Entries...) // some entry has been aborted, we must gc underling array
 	logs.Index0 = index
 }
 

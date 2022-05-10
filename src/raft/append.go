@@ -56,7 +56,14 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// Follower: 2
 	rf.setElectionTimeoutL()
 
+	if args.PrevLogIndex < rf.log.FirstIndex() {
+		reply.Term, reply.Success = rf.currentTerm, true
+		DPrintf("{Node %v} receives unexpected AppendEntriesRequest %v from {Node %v} because prevLogIndex %v < firstLogIndex %v", rf.me, args, args.LeaderId, args.PrevLogIndex, rf.log.FirstIndex())
+		return
+	}
+
 	reply.Success = false
+	DPrintf("[S%v]: wow prevLogIndex %v FirstIndex %v LastIndex %v entries=%v", rf.me, args.PrevLogIndex, rf.log.FirstIndex(), rf.log.LastIndex(), args.Entries)
 	if rf.log.LastIndex() < args.PrevLogIndex {
 		// AppendEntries Receiver implementation: 2
 		reply.ConflictTerm = -1
@@ -77,11 +84,12 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 			entryIndex := args.PrevLogIndex + 1 + i
 			// it's time to append
 			if entryIndex > rf.log.LastIndex() || !rf.log.GetAt(entryIndex).isEqual(e) {
+				//DPrintf("[S%v]: now %v\n", rf.me, args.Entries[i:])
 				rf.log.AppendAfterIndex(entryIndex, args.Entries[i:])
 				break
 			}
 		}
-		DPrintf("[S%v]: now %v\n", rf.me, rf.log)
+		DPrintf("[S%v]: lastIndex %v now %v\n", rf.me, rf.log.LastIndex(), rf.log)
 		rf.advanceCommit(args.LeaderCommit)
 		reply.Success = true
 	}
@@ -98,6 +106,7 @@ func (rf *Raft) advanceCommit(leaderCommit int) {
 		if rf.commitIndex > lastNewIndex {
 			rf.commitIndex = lastNewIndex
 		}
+		DPrintf("[S%v]: follower commitIndex change %v", rf.me, rf.commitIndex)
 		rf.applyCond.Broadcast()
 	}
 }
@@ -148,8 +157,14 @@ func (rf *Raft) processConflictTermL(server int, args *AppendEntriesArgs, reply 
 		index = rf.log.LastIndex()
 	}
 
-	for index >= rf.log.FirstIndex() && rf.log.GetAt(index).Term > reply.ConflictTerm {
+	for index > rf.log.FirstIndex() && rf.log.GetAt(index).Term > reply.ConflictTerm {
 		index--
+	}
+	if index <= rf.log.FirstIndex() {
+		// case 3:
+		// me:     5 5 5
+		// leader: 4 6 6 6
+		return index
 	}
 	if rf.log.GetAt(index).Term == reply.ConflictTerm {
 		// case 2:
@@ -157,17 +172,10 @@ func (rf *Raft) processConflictTermL(server int, args *AppendEntriesArgs, reply 
 		// leader: 4 6 6 6
 		return index + 1
 	} else {
-		if index < rf.log.FirstIndex() {
-			// case 3:
-			// me:     5 5 5
-			// leader: 4 6 6 6
-			return index
-		} else {
-			// case 4:
-			// me:     4 5 5
-			// leader: 4 6 6 6
-			return reply.ConflictIndex
-		}
+		// case 4:
+		// me:     4 5 5
+		// leader: 4 6 6 6
+		return reply.ConflictIndex
 	}
 }
 
@@ -186,52 +194,14 @@ func (rf *Raft) handleAppendReplyL(server int, args *AppendEntriesArgs, reply *A
 			}
 			DPrintf("[S%v]: AppendRequest append [S%v] success match %v next %v reply %v\n", rf.me, server, rf.matchIndex[server], rf.nextIndex[server], reply)
 		} else {
-			DPrintf("[S%v]: last: %v, next: %v\n", rf.me, args.PrevLogIndex, rf.nextIndex[server])
+			//DPrintf("[S%v]: last: %v, next: %v\n", rf.me, args.PrevLogIndex, rf.nextIndex[server])
 
 			rf.nextIndex[server] = rf.processConflictTermL(server, args, reply)
-
-			if rf.nextIndex[server] <= rf.log.FirstIndex() {
-				// send snapshot
-			}
 			DPrintf("[S%v]: AppendRequest append [S%v] fail, back to %v, reply %v\n", rf.me, server, rf.nextIndex[server], reply)
 		}
 	}
 	// commit
 	rf.commitL()
-}
-
-func (rf *Raft) sendAppendL(server int) {
-	next := rf.nextIndex[server]
-
-	if next > rf.log.LastIndex()+1 {
-		next = rf.log.LastIndex()
-	}
-
-	if next-1 < rf.log.FirstIndex() { // it's time to send a snapshot
-		next = rf.log.FirstIndex() + 1
-	}
-
-	args := AppendEntriesArgs{
-		rf.currentTerm,
-		rf.me,
-		next - 1,
-		rf.log.GetAt(next - 1).Term,
-		make([]Entry, rf.log.LastIndex()-next+1),
-		rf.commitIndex,
-	}
-	copy(args.Entries, rf.log.Splice(next))
-
-	go func() {
-		DPrintf("[S%v]: AppendRequest send to [S%v] with %v", rf.me, server, &args)
-		var reply AppendEntriesReply
-		ok := rf.sendAppendRequest(server, &args, &reply)
-		if ok {
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
-			rf.handleAppendReplyL(server, &args, &reply)
-		}
-	}()
-
 }
 
 func (rf *Raft) sendAppend(server int) {
@@ -242,34 +212,37 @@ func (rf *Raft) sendAppend(server int) {
 		rf.mu.Unlock()
 		return
 	}
-	next := rf.nextIndex[server]
 
-	if next > rf.log.LastIndex()+1 {
-		next = rf.log.LastIndex()
+	prevLogIndex := rf.nextIndex[server] - 1
+	if prevLogIndex > rf.log.LastIndex() {
+		prevLogIndex = rf.log.LastIndex()
 	}
 
-	if next-1 < rf.log.FirstIndex() { // it's time to send a snapshot
-		next = rf.log.FirstIndex() + 1
-	}
+	if prevLogIndex < rf.log.FirstIndex() { // it's time to send a snapshot
 
-	args := AppendEntriesArgs{
-		rf.currentTerm,
-		rf.me,
-		next - 1,
-		rf.log.GetAt(next - 1).Term,
-		make([]Entry, rf.log.LastIndex()-next+1),
-		rf.commitIndex,
-	}
-	copy(args.Entries, rf.log.Splice(next))
-
-	rf.mu.Unlock()
-	DPrintf("[S%v]: AppendRequest send to [S%v] with %v", rf.me, server, &args)
-	var reply AppendEntriesReply
-	ok := rf.sendAppendRequest(server, &args, &reply)
-	if ok {
-		rf.mu.Lock()
-		rf.handleAppendReplyL(server, &args, &reply)
+		args := rf.makeSnapshotInstallArgs()
 		rf.mu.Unlock()
+
+		DPrintf("[S%v]: SnapshotInstallRequest send to [S%v] with %v", rf.me, server, args)
+		var reply InstallSnapshotReply
+		ok := rf.sendSnapshotRequest(server, args, &reply)
+		if ok {
+			rf.mu.Lock()
+			rf.handleSnapshotReplyL(server, args, &reply)
+			rf.mu.Unlock()
+		}
+	} else {
+		args := rf.makeAppendEntriesArgs(prevLogIndex)
+		rf.mu.Unlock()
+
+		DPrintf("[S%v]: AppendRequest send to [S%v] with %v", rf.me, server, args)
+		var reply AppendEntriesReply
+		ok := rf.sendAppendRequest(server, args, &reply)
+		if ok {
+			rf.mu.Lock()
+			rf.handleAppendReplyL(server, args, &reply)
+			rf.mu.Unlock()
+		}
 	}
 }
 
@@ -286,6 +259,20 @@ func (rf *Raft) sendAppendsL(isHeartBeat bool) {
 			rf.replicatorCond[i].Broadcast()
 		}
 	}
+}
+
+func (rf *Raft) makeAppendEntriesArgs(prevLogIndex int) *AppendEntriesArgs {
+
+	args := AppendEntriesArgs{
+		rf.currentTerm,
+		rf.me,
+		prevLogIndex,
+		rf.log.GetAt(prevLogIndex).Term,
+		make([]Entry, rf.log.LastIndex()-prevLogIndex),
+		rf.commitIndex,
+	}
+	copy(args.Entries, rf.log.Splice(prevLogIndex+1))
+	return &args
 }
 
 func (rf *Raft) replicator(peer int) {

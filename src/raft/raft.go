@@ -44,6 +44,11 @@ type ApplyMsg struct {
 	Command      interface{}
 	CommandIndex int
 	CommandTerm  int
+
+	SnapshotValid bool
+	SnapshotData  []byte
+	SnapshotTerm  int
+	SnapshotIndex int
 }
 
 //
@@ -76,6 +81,9 @@ type Raft struct {
 
 	replicatorCond []*sync.Cond
 
+	waitSnapshotFlag bool
+	waitSnapshot     *InstallSnapshotArgs
+
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -90,6 +98,12 @@ func (rf *Raft) GetState() (int, bool) {
 	defer rf.mu.Unlock()
 	// Your code here (2A).
 	return rf.currentTerm, rf.role == Leader
+}
+
+func (rf *Raft) GetLogLength() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.persister.RaftStateSize()
 }
 
 //
@@ -134,35 +148,43 @@ func (rf *Raft) applier() {
 	if rf.lastApplied < rf.log.FirstIndex() {
 		rf.lastApplied = rf.log.FirstIndex()
 	}
+	DPrintf("[S%v]: applier start lastApplied=%v firstIndex=%v\n", rf.me, rf.lastApplied, rf.log.FirstIndex())
 	rf.mu.Unlock()
 
 	for rf.killed() == false {
 		rf.mu.Lock()
 		// All Servers: 1
-		for rf.commitIndex <= rf.lastApplied {
+		for rf.commitIndex <= rf.lastApplied && !rf.waitSnapshotFlag {
 			rf.applyCond.Wait()
 		}
-		commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
-		entries := make([]Entry, commitIndex-lastApplied)
-		copy(entries, rf.log.Get(lastApplied+1, commitIndex+1))
-		rf.mu.Unlock()
-		for i, e := range entries {
-			var msg ApplyMsg
-			msg.Command = e.Command
-			msg.CommandIndex = lastApplied + 1 + i
-			msg.CommandValid = true
-			msg.CommandTerm = e.Term
+
+		if rf.waitSnapshotFlag {
+			rf.waitSnapshotFlag = false
+			msg := ApplyMsg{
+				SnapshotValid: true,
+				SnapshotData:  rf.waitSnapshot.Data,
+				SnapshotTerm:  rf.waitSnapshot.LastIncludedTerm,
+				SnapshotIndex: rf.waitSnapshot.LastIncludedIndex,
+			}
+			rf.mu.Unlock()
 			rf.applyCh <- msg
-			DPrintf("[S%v]: Apply %v %v", rf.me, rf.lastApplied, &e)
-		}
-		rf.mu.Lock()
-		// we don't hold lock during push channel operation
-		// avoid concurrently InstallSnapshot rpc causing lastApplied to rollback
-		if rf.lastApplied < commitIndex {
-			// use commitIndex rather than rf.commitIndex because rf.commitIndex may change during the Unlock() and Lock()
+		} else if rf.commitIndex > rf.lastApplied {
+			commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
+			entries := make([]Entry, commitIndex-lastApplied)
+			DPrintf("[S%v]: commitIndex %v lastApplied %v first %v last %v", rf.me, commitIndex+1, lastApplied+1, rf.log.FirstIndex(), rf.log.LastIndex())
+			copy(entries, rf.log.Get(lastApplied+1, commitIndex+1))
 			rf.lastApplied = commitIndex
+			rf.mu.Unlock()
+			for i, e := range entries {
+				var msg ApplyMsg
+				msg.Command = e.Command
+				msg.CommandIndex = lastApplied + 1 + i
+				msg.CommandValid = true
+				msg.CommandTerm = e.Term
+				rf.applyCh <- msg
+				DPrintf("[S%v]: Apply %v %v", rf.me, lastApplied+1+i, &e)
+			}
 		}
-		rf.mu.Unlock()
 	}
 }
 
@@ -216,6 +238,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	DPrintf("restore persist state and state machine\n")
 
 	rf.applyCond = sync.NewCond(&rf.mu)
 

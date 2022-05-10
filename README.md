@@ -43,3 +43,34 @@
 2. 论文中Figure8所表达的情形是，新的leader并不知道之前term的log是否已经被提交，所以当且仅当leader自己term的log被复制到大多数它才允许间接apply其他term的日志，换句话说leader拥有至少在自己任期内提交一个log的能力，它才能下决断提交之前的log，因为如果它有这种能力，在它崩溃后，新的leader将从允许它提交的大多数中选择，而从这些服务器中选出来的leader显然不会重复提交任何index上的log。这种解决方案带来的一个问题就是，如果leader长时间无法将自己term的log复制到大多数（可能是网络问题，也可能是根本没有客户请求），那么即使他能够将之前term的log复制到大多数，它也不被允许提交这些log，这就意味着其他term的客户的请求会被阻塞，所以leader迫切地需要知道之前term的log能否提交。一个可能的解决方案是，在新的leader上任后，发送一个command为空的no-op log，通过测试这个log能否被提交来间接将其他term的log提交。
 
 3. preVote策略可以防止被分到少数分区的server不会重复超时选举，导致term递增，所以当其重新与多数分区恢复通信时也不会造成多数分区的leader失效引发重新选举
+
+## Lab3 Fault-tolerant Key/Value Service
+
+- [x] K/V service based on raft, can deal with unreliable net, restarts, partitions, many clients and keep linearized
+- [x] Snapshot for log compaction
+- [ ] ReadIndex
+- [ ] Lease mechanism
+
+**实验笔记**
+
+1. 当检测出读请求重复时，不可以用类似写请求的方法直接从哈希表中拿上次的读结果，因为读请求要能够反映出最新的写结果，请求键对应的实际值可能已经被其他写请求修改，所以哈希表中的键值对可能是过期的，解决方法有两种，第一种是走一遍raft流程，第二种是从状态机中查询，这里我用的是第一种。不从哈希表中获取读结果，也就意味着没必要缓存读结果。
+
+2. 必须设置请求超时，因为如果leader在接受客户请求并阻塞等待raft流程返回的结果的过程中失去了leader的身份，并且该请求对应的日志也被新的leader覆盖，那么如果不设置超时，客户会永远等待下去。
+
+3. 这里我为raft每个index上的log都创建了一个channel用于通知KV server的RPC线程何时解除阻塞，由于log的index会越来越大，必须及时清理不需要的channel，这里每个channel只会发送接收一次数据，所以接收后就可以清理了。
+
+4. server与raft的snapshot交互方法是：如果server认为log太长，就会保存当前的状态，保存成功后要求raft层删除所有log；如果leader认为follower落后太多就会把自己最近的snapshot发给follower的raft层，follower收到后不能盲目保存和删除日志，要通过apply channel通知上层server恢复snapshot到状态机，恢复成功后，上层再通知其raft层删除对应日志，并保存snapshot。
+
+5. 由于snapshot和command共用apply channel与上层通信，所以snapshot信息可能会与command交错传递给上层server，导致snapshot已经被apply，而过期的command还在外进传，所以要在server端添加过期判断。
+
+6. 删除log的时候要留一个dummy节点，该节点所在的index是snapshot中最后一个被apply的command。
+
+7. 既可以在AppendEntries的RPC接收端判断是否需要接收snapshot，也可以在发送端判断是否需要发送snapshot，这里为了便于阅读，将判断放在发送端
+
+8. server将log应用到状态机的过程是不阻塞接收客户端请求的（raft的Start调用不加server的锁），从而提高了并发性能
+
+9. 从channel中发送和接收数据时，不要持有锁，避免发生死锁。
+
+**仍需改进的地方：**
+
+1. 读过程依然走raft流程，no-op+ReadIndex+Lease是后续的优化思路。

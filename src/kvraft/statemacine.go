@@ -7,7 +7,7 @@ type KVStateMachine interface {
 }
 
 type MemKV struct {
-	table map[string]string
+	Table map[string]string
 }
 
 // NewMemoryKV must return pointer
@@ -16,7 +16,7 @@ func NewMemoryKV() *MemKV {
 }
 
 func (mkv *MemKV) Get(key string) (string, Err) {
-	value, ok := mkv.table[key]
+	value, ok := mkv.Table[key]
 	if !ok {
 		return "", ErrNoKey
 	}
@@ -24,11 +24,11 @@ func (mkv *MemKV) Get(key string) (string, Err) {
 }
 
 func (mkv *MemKV) Put(key string, value string) Err {
-	mkv.table[key] = value
+	mkv.Table[key] = value
 	return OK
 }
 
 func (mkv *MemKV) Append(key string, value string) Err {
-	mkv.table[key] += value
+	mkv.Table[key] += value
 	return OK
 }
