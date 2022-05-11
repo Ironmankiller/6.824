@@ -81,7 +81,7 @@ type Raft struct {
 
 	replicatorCond []*sync.Cond
 
-	waitSnapshotFlag bool
+	waitSnapshotFlag bool // Indicate is there any snapshot supposed to apply to server.
 	waitSnapshot     *InstallSnapshotArgs
 
 	// Your data here (2A, 2B, 2C).

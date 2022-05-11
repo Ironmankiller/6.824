@@ -23,6 +23,7 @@ func (a *InstallSnapshotReply) String() string {
 	return fmt.Sprintf("InstallSnapshotReply: {Term %v}", a.Term)
 }
 
+// SnapShot Invoked by app layer who think the raft log is too long, delete the log before "index" and persist.
 func (rf *Raft) SnapShot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -35,11 +36,18 @@ func (rf *Raft) SnapShot(index int, snapshot []byte) {
 	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
 }
 
+// ApplySnapshot Invoked by app layer to delete corresponding log in raft layer, update raft state and persist.
 func (rf *Raft) ApplySnapshot(data []byte, lastTerm int, lastIndex int) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if lastIndex <= rf.commitIndex {
+	// Notice that "lastIndex > rf.commitIndex" while "lastIndex < rf.log.FirstIndex()" is possible.
+	// In the other word, commit index is smaller than log's first index occasionally.
+	// when I ran 2000 times, this case occurred once, I guess This server was restarted, and commit index
+	// was 0 at beginning, so it didn't met the "lastIndex <= rf.commitIndex" condition, while its log is
+	// newer than snapshot send by leader. So this server must reject this snapshot, otherwise, the panic will
+	// be triggered at line 57.
+	if lastIndex <= rf.commitIndex || lastIndex < rf.log.FirstIndex() {
 		DPrintf("[S%v]: reject snapshot server commitIndex=%v, snapshot lastIndex=%v", rf.me, rf.commitIndex, lastIndex)
 		return false
 	}
