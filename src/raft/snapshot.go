@@ -101,7 +101,10 @@ func (rf *Raft) handleSnapshotReplyL(server int, args *InstallSnapshotArgs, repl
 	if reply.Term > rf.currentTerm {
 		rf.newTermL(reply.Term)
 	} else {
-		rf.nextIndex[server] = args.LastIncludedIndex + 1
+		next := args.LastIncludedIndex + 1
+		if next > rf.nextIndex[server] { // nextIndex[server] might be updated by handleAppendReplyL, we must keep nextIndex monotonic increasing.
+			rf.nextIndex[server] = next
+		}
 	}
 
 	DPrintf("[S%v] get %v ShotShotInstall reply %v next %v", rf.me, server, reply, rf.nextIndex[server])

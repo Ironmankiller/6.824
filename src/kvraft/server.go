@@ -99,6 +99,8 @@ func (kv *KVServer) processCommandValid(log raft.ApplyMsg) {
 			kv.lastResult[command.ClientId] = CommandContext{command.CommandId, reply}
 		}
 		kv.mu.Unlock()
+	} else {
+		DPrintf("[S%v]: duplicate %v, not notify %v\n", kv.me, command, log.CommandIndex)
 	}
 
 	// Check "isLeader==true" means only notify rpc thread whose client is waited on leader server.
@@ -257,7 +259,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.applySnapshot(persister.ReadSnapshot())
-	DPrintf("[S%v]: state machine restore %v", kv.me, kv.statemachine)
+	DPrintf("[S%v]: state machine restore", kv.me)
 	go kv.applier()
 
 	return kv

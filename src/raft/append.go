@@ -153,7 +153,6 @@ func (rf *Raft) processConflictTermL(server int, args *AppendEntriesArgs, reply 
 	index := args.PrevLogIndex
 
 	if index > rf.log.LastIndex() {
-		DPrintf("[S%v]: very bad\n", rf.me)
 		index = rf.log.LastIndex()
 	}
 
