@@ -41,8 +41,7 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.Term < rf.currentTerm {
 		// AppendEntries Receiver implementation: 1
-		reply.Success = false
-		reply.Term = rf.currentTerm
+		reply.Success, reply.Term = false, rf.currentTerm
 		return
 	}
 
@@ -51,15 +50,18 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.newTermL(args.Term)
 	}
 
-	// 这里有必要设为Follower吗？
-	rf.role = Follower
 	// Follower: 2
 	rf.setElectionTimeoutL()
 
+	// Follower's log might be updated by snapshot.
 	if args.PrevLogIndex < rf.log.FirstIndex() {
-		reply.Term, reply.Success = rf.currentTerm, true
 		DPrintf("{Node %v} receives unexpected AppendEntriesRequest %v from {Node %v} because prevLogIndex %v < firstLogIndex %v", rf.me, args, args.LeaderId, args.PrevLogIndex, rf.log.FirstIndex())
-		return
+		if rf.log.FirstIndex() > args.PrevLogIndex+len(args.Entries) {
+			reply.Success, reply.Term = false, rf.currentTerm
+			return
+		}
+		args.Entries = args.Entries[rf.log.FirstIndex()-args.PrevLogIndex:]
+		args.PrevLogIndex = rf.log.FirstIndex()
 	}
 
 	reply.Success = false
@@ -83,8 +85,10 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 		for i, e := range args.Entries {
 			entryIndex := args.PrevLogIndex + 1 + i
 			// it's time to append
+			// We shouldn't overwrite new entries while the old AppendEntries request coming late because of
+			// network latency. But how do we know if the request is staled? I think if there is entry send by
+			// leader differ from log exist in follower, we must accept all the entries come from leader.
 			if entryIndex > rf.log.LastIndex() || !rf.log.GetAt(entryIndex).isEqual(e) {
-				//DPrintf("[S%v]: now %v\n", rf.me, args.Entries[i:])
 				rf.log.AppendAfterIndex(entryIndex, args.Entries[i:])
 				break
 			}

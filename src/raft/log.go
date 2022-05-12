@@ -49,24 +49,26 @@ func (logs *LogEntries) Append(e Entry) {
 	logs.Entries = append(logs.Entries, e)
 }
 
-func (logs *LogEntries) AppendAfterIndex(index int, entrys []Entry) {
+// AppendAfterIndex erase entries after index (include index), and append entries.
+func (logs *LogEntries) AppendAfterIndex(index int, entries []Entry) {
 
-	logs.Entries = append(logs.Entries[:index-logs.Index0], entrys...)
+	logs.Entries = append(logs.Entries[:index-logs.Index0], entries...)
 	logs.Entries = append(make([]Entry, 0, len(logs.Entries)), logs.Entries...) // some entry has been aborted, we must gc underling array
 }
 
-// erase the log entry before a specific index (not include index)
+// EraseBefore erase the log entry before a specific index (not include index)
 func (logs *LogEntries) EraseBefore(index int) {
 	logs.Entries = logs.Entries[index-logs.Index0:]
 	logs.Entries = append(make([]Entry, 0, len(logs.Entries)), logs.Entries...) // some entry has been aborted, we must gc underling array
 	logs.Index0 = index
 }
 
+// EraseAfter erase the log entry after a specific index (include index)
 func (logs *LogEntries) EraseAfter(index int) {
 	logs.Entries = logs.Entries[:index-logs.Index0]
 }
 
-// add an dummy entry
+// makeLogEntriesEmpty Add a dummy entry
 func makeLogEntriesEmpty() LogEntries {
 	var logEntries LogEntries
 	logEntries.Index0 = 0

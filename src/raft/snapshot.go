@@ -101,9 +101,14 @@ func (rf *Raft) handleSnapshotReplyL(server int, args *InstallSnapshotArgs, repl
 	if reply.Term > rf.currentTerm {
 		rf.newTermL(reply.Term)
 	} else {
+		// We must keep nextIndex monotonic increasing. Otherwise, some log may be sent many times.
 		next := args.LastIncludedIndex + 1
-		if next > rf.nextIndex[server] { // nextIndex[server] might be updated by handleAppendReplyL, we must keep nextIndex monotonic increasing.
+		match := args.LastIncludedIndex
+		if next > rf.nextIndex[server] {
 			rf.nextIndex[server] = next
+		}
+		if match > rf.matchIndex[server] {
+			rf.matchIndex[server] = match
 		}
 	}
 
