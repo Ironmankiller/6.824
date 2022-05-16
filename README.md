@@ -53,7 +53,7 @@
 - [ ] ReadIndex
 - [ ] Lease mechanism
 
-并发测试2000次无FAIL
+并发测试6000次无FAIL
 
 **实验笔记**
 
