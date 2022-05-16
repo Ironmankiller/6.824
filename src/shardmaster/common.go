@@ -1,5 +1,7 @@
 package shardmaster
 
+import "fmt"
+
 //
 // Master shard server: assigns shards to replication groups.
 //
@@ -28,46 +30,44 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
+func (c *Config) String() string {
+	return fmt.Sprintf("Num: %v Shards {%v} Groups {%v}", c.Num, c.Shards, c.Groups)
+}
+
 const (
-	OK = "OK"
+	OK             = "OK"
+	ErrNoConfig    = "ErrNoConfig"
+	ErrWrongLeader = "ErrWrongLeader"
+	ErrTimeout     = "ErrTimeout"
 )
 
 type Err string
 
-type JoinArgs struct {
-	Servers map[int][]string // new GID -> servers mappings
+const (
+	JoinOp  = "Join"
+	LeaveOp = "Leave"
+	MoveOp  = "Move"
+	QueryOp = "Query"
+)
+
+type OpTypeName string
+
+type CommandArgs struct {
+	CommandId int
+	ClientId  int64
+	Servers   map[int][]string // new GID -> servers mappings
+	Num       int              // desired config number
+	Shard     int
+	GID       int
+	GIDs      []int
+	OpType    OpTypeName // "Join" "Leave" "Move" and "Query"
 }
 
-type JoinReply struct {
-	WrongLeader bool
-	Err         Err
+type CommandReply struct {
+	Err    Err
+	Config Config
 }
 
-type LeaveArgs struct {
-	GIDs []int
-}
-
-type LeaveReply struct {
-	WrongLeader bool
-	Err         Err
-}
-
-type MoveArgs struct {
-	Shard int
-	GID   int
-}
-
-type MoveReply struct {
-	WrongLeader bool
-	Err         Err
-}
-
-type QueryArgs struct {
-	Num int // desired config number
-}
-
-type QueryReply struct {
-	WrongLeader bool
-	Err         Err
-	Config      Config
+func (c *CommandReply) String() string {
+	return fmt.Sprintf("Err: %v Config: %v", c.Err, c.Config)
 }

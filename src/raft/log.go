@@ -12,7 +12,7 @@ func (e Entry) String() string {
 }
 
 func (e Entry) isEqual(tmp Entry) bool {
-	return e.Term == tmp.Term && e.Command == tmp.Command
+	return e.Term == tmp.Term
 }
 
 type LogEntries struct {
