@@ -2,7 +2,6 @@ package raft
 
 import (
 	"bytes"
-
 	"ds/labgob"
 )
 

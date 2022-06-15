@@ -28,12 +28,15 @@ func (rf *Raft) SnapShot(index int, snapshot []byte) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if index < rf.log.FirstIndex() {
-		DPrintf("error: index is smaller than first index of raft log")
+		DPrintf("[S%v][G%v]: error: index is smaller than first index of raft log", rf.me, rf.Gid)
 		return
 	}
-	DPrintf("[S%v]: SnapShot EraseBefore index %v", rf.me, index)
+	//fmt.Printf("[S%v]: SnapShot EraseBefore index %v last index %v\n", rf.me, index, rf.log.LastIndex())
+	//fmt.Printf("before[S%v]: SnapShot %v log %v\n", rf.me, rf.log.GetLogLength(), rf.persister.RaftStateSize())
 	rf.log.EraseBefore(index)
+	//fmt.Printf("after[S%v]: SnapShot %v log %v\n", rf.me, rf.log.GetLogLength(), rf.persister.RaftStateSize())
 	rf.persister.SaveStateAndSnapshot(rf.encodeState(), snapshot)
+	//fmt.Printf("save[S%v]: SnapShot %v log %v\n", rf.me, rf.log.GetLogLength(), rf.persister.RaftStateSize())
 }
 
 // ApplySnapshot Invoked by app layer to delete corresponding log in raft layer, update raft state and persist.
@@ -48,7 +51,7 @@ func (rf *Raft) ApplySnapshot(data []byte, lastTerm int, lastIndex int) bool {
 	// newer than snapshot send by leader. So this server must reject this snapshot, otherwise, the panic will
 	// be triggered at line 57.
 	if lastIndex <= rf.commitIndex || lastIndex < rf.log.FirstIndex() {
-		DPrintf("[S%v]: reject snapshot server commitIndex=%v, snapshot lastIndex=%v", rf.me, rf.commitIndex, lastIndex)
+		DPrintf("[S%v][G%v]: reject snapshot server commitIndex=%v, snapshot lastIndex=%v", rf.me, rf.me, rf.commitIndex, lastIndex)
 		return false
 	}
 
@@ -66,7 +69,7 @@ func (rf *Raft) ApplySnapshot(data []byte, lastTerm int, lastIndex int) bool {
 	rf.lastApplied, rf.commitIndex = lastIndex, lastIndex
 
 	rf.persister.SaveStateAndSnapshot(rf.encodeState(), data)
-	DPrintf("[S%v]: accept snapshot server commitIndex=%v, log %v", rf.me, lastIndex, rf.log)
+	DPrintf("[S%v][G%v]: accept snapshot server commitIndex=%v, log %v", rf.me, rf.Gid, lastIndex, rf.log)
 	return true
 }
 
@@ -101,7 +104,7 @@ func (rf *Raft) handleSnapshotReplyL(server int, args *InstallSnapshotArgs, repl
 	if reply.Term > rf.currentTerm {
 		rf.newTermL(reply.Term)
 	} else {
-		// We must keep nextIndex monotonic increasing. Otherwise, some log may be sent many times.
+		// Some log may be sent many times, but we must keep nextIndex monotonic increasing.
 		next := args.LastIncludedIndex + 1
 		match := args.LastIncludedIndex
 		if next > rf.nextIndex[server] {
@@ -112,7 +115,7 @@ func (rf *Raft) handleSnapshotReplyL(server int, args *InstallSnapshotArgs, repl
 		}
 	}
 
-	DPrintf("[S%v] get %v ShotShotInstall reply %v next %v", rf.me, server, reply, rf.nextIndex[server])
+	DPrintf("[S%v][G%v] get %v ShotShotInstall reply %v next %v", rf.me, rf.Gid, server, reply, rf.nextIndex[server])
 }
 
 func (rf *Raft) makeSnapshotInstallArgs() *InstallSnapshotArgs {

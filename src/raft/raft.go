@@ -84,10 +84,24 @@ type Raft struct {
 	waitSnapshotFlag bool // Indicate is there any snapshot supposed to apply to server.
 	waitSnapshot     *InstallSnapshotArgs
 
+	Gid int
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+}
+
+func (rf *Raft) SetGid(g int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.Gid = g
+	DPrintf("set gid ok %v\n", rf.Gid)
+}
+
+func (rf *Raft) GetGid() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.Gid
 }
 
 // return currentTerm and whether this server
@@ -104,6 +118,18 @@ func (rf *Raft) GetLogLength() int {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	return rf.persister.RaftStateSize()
+}
+
+func (rf *Raft) GetSnapshotLength() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.persister.SnapshotSize()
+}
+
+func (rf *Raft) HasCurrentTermLog() bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.log.GetAt(rf.log.LastIndex()).Term == rf.currentTerm
 }
 
 //
@@ -137,7 +163,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.sendAppendsL(false)
 
 	index := rf.log.LastIndex()
-	DPrintf("[S%v]: Start %v %v", rf.me, index, e)
+	DPrintf("[S%v][G%v]: Start %v %v", rf.me, rf.Gid, index, e)
 	return index, rf.currentTerm, true
 }
 
@@ -148,7 +174,7 @@ func (rf *Raft) applier() {
 	if rf.lastApplied < rf.log.FirstIndex() {
 		rf.lastApplied = rf.log.FirstIndex()
 	}
-	DPrintf("[S%v]: applier start lastApplied=%v firstIndex=%v\n", rf.me, rf.lastApplied, rf.log.FirstIndex())
+	DPrintf("[S%v][G%v]: applier start lastApplied=%v firstIndex=%v\n", rf.me, rf.Gid, rf.lastApplied, rf.log.FirstIndex())
 	rf.mu.Unlock()
 
 	for rf.killed() == false {
@@ -171,7 +197,7 @@ func (rf *Raft) applier() {
 		} else if rf.commitIndex > rf.lastApplied {
 			commitIndex, lastApplied := rf.commitIndex, rf.lastApplied
 			entries := make([]Entry, commitIndex-lastApplied)
-			DPrintf("[S%v]: commitIndex %v lastApplied %v first %v last %v", rf.me, commitIndex+1, lastApplied+1, rf.log.FirstIndex(), rf.log.LastIndex())
+			DPrintf("[S%v][G%v]: commitIndex %v lastApplied %v first %v last %v", rf.me, rf.Gid, commitIndex+1, lastApplied+1, rf.log.FirstIndex(), rf.log.LastIndex())
 			copy(entries, rf.log.Get(lastApplied+1, commitIndex+1))
 			rf.lastApplied = commitIndex
 			rf.mu.Unlock()
@@ -182,7 +208,7 @@ func (rf *Raft) applier() {
 				msg.CommandValid = true
 				msg.CommandTerm = e.Term
 				rf.applyCh <- msg
-				DPrintf("[S%v]: Apply %v %v", rf.me, lastApplied+1+i, &e)
+				DPrintf("[S%v][G%v]: Apply %v %v", rf.me, rf.Gid, lastApplied+1+i, &e)
 			}
 		}
 	}
@@ -238,7 +264,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-	DPrintf("restore persist state and state machine\n")
+	DPrintf("[S%v][G%v]: restore persist state and state machine\n", rf.me, rf.Gid)
 
 	rf.applyCond = sync.NewCond(&rf.mu)
 

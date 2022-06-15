@@ -68,7 +68,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("[S%v]: RequestVote receive from [S%v] with %v", rf.me, args.CandidateId, args)
+	DPrintf("[S%v][G%v]: RequestVote receive from [S%v] with %v", rf.me, rf.Gid, args.CandidateId, args)
 	if args.Term > rf.currentTerm {
 		rf.newTermL(args.Term)
 	}
@@ -98,7 +98,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) becomeLeader() {
-	DPrintf("[S%v]: become a leader log len %v\n", rf.me, len(rf.log.Entries))
+	DPrintf("[S%v][G%v]: become a leader log len %v\n", rf.me, rf.Gid, len(rf.log.Entries))
 	rf.role = Leader
 	for i := range rf.nextIndex {
 		rf.nextIndex[i] = rf.log.LastIndex() + 1
@@ -107,13 +107,13 @@ func (rf *Raft) becomeLeader() {
 
 func (rf *Raft) requestVote(args RequestVoteArgs, server int) {
 	var reply RequestVoteReply
-	DPrintf("[S%v]: RequestVote send to [S%v] with %v", rf.me, server, &args)
+	DPrintf("[S%v][G%v]: RequestVote send to [S%v] with %v", rf.me, rf.Gid, server, &args)
 	ok := rf.sendRequestVote(server, &args, &reply)
 	if ok {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 
-		DPrintf("[S%v]: RequestVote reply by [S%v] with %v\n", rf.me, server, reply)
+		DPrintf("[S%v][G%v]: RequestVote reply by [S%v] with %v\n", rf.me, rf.Gid, server, reply)
 
 		// 参选者有可能已经发现别的leader，并变成follower了
 		if rf.role == Candidate && rf.currentTerm == args.Term {
@@ -142,7 +142,7 @@ func (rf *Raft) startElectionL() {
 	rf.votedFor = rf.me
 	rf.persist()
 
-	DPrintf("[S%v]: attempting an election at term %v\n", rf.me, rf.currentTerm)
+	DPrintf("[S%v][G%v]: attempting an election at term %v\n", rf.me, rf.Gid, rf.currentTerm)
 
 	rf.votes = 1
 
@@ -161,7 +161,7 @@ func (rf *Raft) startElectionL() {
 }
 
 func (rf *Raft) newTermL(term int) {
-	DPrintf("[S%v]: new Term %v, become Follower\n", rf.me, term)
+	DPrintf("[S%v][G%v]: new Term %v, become Follower\n", rf.me, rf.Gid, term)
 	rf.role = Follower
 	rf.currentTerm = term
 	rf.votedFor = -1
@@ -193,7 +193,9 @@ func (rf *Raft) setElectionTimeoutL() {
 }
 
 func (rf *Raft) startTick() {
+	rf.mu.Lock()
 	rf.setElectionTimeoutL()
+	rf.mu.Unlock()
 	for rf.killed() == false {
 		rf.tick()
 		time.Sleep(time.Millisecond * tickInterval)

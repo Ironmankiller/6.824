@@ -55,7 +55,7 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// Follower's log might be updated by snapshot.
 	if args.PrevLogIndex < rf.log.FirstIndex() {
-		DPrintf("{Node %v} receives unexpected AppendEntriesRequest %v from {Node %v} because prevLogIndex %v < firstLogIndex %v", rf.me, args, args.LeaderId, args.PrevLogIndex, rf.log.FirstIndex())
+		//DPrintf("{Node %v} receives unexpected AppendEntriesRequest %v from {Node %v} because prevLogIndex %v < firstLogIndex %v", rf.me, args, args.LeaderId, args.PrevLogIndex, rf.log.FirstIndex())
 		if rf.log.FirstIndex() > args.PrevLogIndex+len(args.Entries) {
 			reply.Success, reply.Term = false, rf.currentTerm
 			return
@@ -65,7 +65,7 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	reply.Success = false
-	DPrintf("[S%v]: wow prevLogIndex %v FirstIndex %v LastIndex %v entries=%v", rf.me, args.PrevLogIndex, rf.log.FirstIndex(), rf.log.LastIndex(), args.Entries)
+	DPrintf("[S%v][G%v]: wow prevLogIndex %v FirstIndex %v LastIndex %v entries=%v", rf.me, rf.Gid, args.PrevLogIndex, rf.log.FirstIndex(), rf.log.LastIndex(), args.Entries)
 	if rf.log.LastIndex() < args.PrevLogIndex {
 		// AppendEntries Receiver implementation: 2
 		reply.ConflictTerm = -1
@@ -93,7 +93,7 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 				break
 			}
 		}
-		DPrintf("[S%v]: lastIndex %v now %v\n", rf.me, rf.log.LastIndex(), rf.log)
+		DPrintf("[S%v][G%v]: lastIndex %v now %v\n", rf.me, rf.Gid, rf.log.LastIndex(), rf.log)
 		rf.advanceCommit(args.LeaderCommit)
 		reply.Success = true
 	}
@@ -110,7 +110,7 @@ func (rf *Raft) advanceCommit(leaderCommit int) {
 		if rf.commitIndex > lastNewIndex {
 			rf.commitIndex = lastNewIndex
 		}
-		DPrintf("[S%v]: follower commitIndex change %v", rf.me, rf.commitIndex)
+		DPrintf("[S%v][G%v]: follower commitIndex change %v", rf.me, rf.Gid, rf.commitIndex)
 		rf.applyCond.Broadcast()
 	}
 }
@@ -137,7 +137,7 @@ func (rf *Raft) commitL() {
 			}
 			if n > len(rf.peers)/2 {
 				rf.commitIndex = i
-				DPrintf("[S%v]: commit %v", rf.me, rf.commitIndex)
+				DPrintf("[S%v][G%v]: commit %v", rf.me, rf.Gid, rf.commitIndex)
 				break
 			}
 		}
@@ -195,12 +195,12 @@ func (rf *Raft) handleAppendReplyL(server int, args *AppendEntriesArgs, reply *A
 			if match > rf.matchIndex[server] {
 				rf.matchIndex[server] = match
 			}
-			DPrintf("[S%v]: AppendRequest append [S%v] success match %v next %v reply %v\n", rf.me, server, rf.matchIndex[server], rf.nextIndex[server], reply)
+			DPrintf("[S%v][G%v]: AppendRequest append [S%v] success match %v next %v reply %v\n", rf.me, rf.Gid, server, rf.matchIndex[server], rf.nextIndex[server], reply)
 		} else {
 			//DPrintf("[S%v]: last: %v, next: %v\n", rf.me, args.PrevLogIndex, rf.nextIndex[server])
 
 			rf.nextIndex[server] = rf.processConflictTermL(server, args, reply)
-			DPrintf("[S%v]: AppendRequest append [S%v] fail, back to %v, reply %v\n", rf.me, server, rf.nextIndex[server], reply)
+			DPrintf("[S%v][G%v]: AppendRequest append [S%v] fail, back to %v, reply %v\n", rf.me, rf.Gid, server, rf.nextIndex[server], reply)
 		}
 	}
 	// commit
@@ -226,7 +226,8 @@ func (rf *Raft) sendAppend(server int) {
 		args := rf.makeSnapshotInstallArgs()
 		rf.mu.Unlock()
 
-		DPrintf("[S%v]: SnapshotInstallRequest send to [S%v] with %v", rf.me, server, args)
+		DPrintf("[S%v][G%v]: SnapshotInstallRequest send to [S%v] with %v", rf.me, rf.Gid, server, args)
+		//fmt.Printf("[S%v]: SnapshotInstallRequest send to [S%v] with %v", rf.me, server, args)
 		var reply InstallSnapshotReply
 		ok := rf.sendSnapshotRequest(server, args, &reply)
 		if ok {
@@ -238,7 +239,8 @@ func (rf *Raft) sendAppend(server int) {
 		args := rf.makeAppendEntriesArgs(prevLogIndex)
 		rf.mu.Unlock()
 
-		DPrintf("[S%v]: AppendRequest send to [S%v] with %v", rf.me, server, args)
+		DPrintf("[S%v][G%v]: AppendRequest send to [S%v] with %v", rf.me, rf.GetGid(), server, args)
+		//fmt.Printf("[S%v]: AppendRequest send to [S%v] with %v", rf.me, server, args)
 		var reply AppendEntriesReply
 		ok := rf.sendAppendRequest(server, args, &reply)
 		if ok {

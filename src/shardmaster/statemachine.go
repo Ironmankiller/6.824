@@ -10,7 +10,7 @@ type ConfigStateMachine interface {
 }
 
 type MemConfig struct {
-	configs []Config
+	Configs []Config
 }
 
 // NewMemConfig must return pointer
@@ -20,7 +20,7 @@ func NewMemConfig() *MemConfig {
 
 func (mc *MemConfig) Join(groups map[int][]string) Err {
 
-	latest := mc.configs[len(mc.configs)-1]
+	latest := mc.Configs[len(mc.Configs)-1]
 	newConfig := Config{
 		latest.Num + 1,
 		latest.Shards,
@@ -56,14 +56,14 @@ func (mc *MemConfig) Join(groups map[int][]string) Err {
 	}
 
 	newConfig.Shards = newShards
-	mc.configs = append(mc.configs, newConfig)
+	mc.Configs = append(mc.Configs, newConfig)
 
 	return OK
 }
 
 func (mc *MemConfig) Leave(gids []int) Err {
 
-	latest := mc.configs[len(mc.configs)-1]
+	latest := mc.Configs[len(mc.Configs)-1]
 	newConfig := Config{
 		latest.Num + 1,
 		latest.Shards,
@@ -96,12 +96,12 @@ func (mc *MemConfig) Leave(gids []int) Err {
 	}
 
 	newConfig.Shards = newShards
-	mc.configs = append(mc.configs, newConfig)
+	mc.Configs = append(mc.Configs, newConfig)
 	return OK
 }
 
 func (mc *MemConfig) Move(shard int, gid int) Err {
-	latest := mc.configs[len(mc.configs)-1]
+	latest := mc.Configs[len(mc.Configs)-1]
 
 	shards := latest.Shards
 	shards[shard] = gid
@@ -112,15 +112,15 @@ func (mc *MemConfig) Move(shard int, gid int) Err {
 		copyMap(latest.Groups),
 	}
 
-	mc.configs = append(mc.configs, c)
+	mc.Configs = append(mc.Configs, c)
 	return OK
 }
 
 func (mc *MemConfig) Query(num int) (Config, Err) {
-	if num >= len(mc.configs) || num < 0 {
-		return mc.configs[len(mc.configs)-1], OK
+	if num >= len(mc.Configs) || num < 0 {
+		return mc.Configs[len(mc.Configs)-1], OK
 	}
-	c := mc.configs[num]
+	c := mc.Configs[num]
 	return c, OK
 }
 

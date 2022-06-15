@@ -52,20 +52,40 @@ func (logs *LogEntries) Append(e Entry) {
 // AppendAfterIndex erase entries after index (include index), and append entries.
 func (logs *LogEntries) AppendAfterIndex(index int, entries []Entry) {
 
-	logs.Entries = append(logs.Entries[:index-logs.Index0], entries...)
-	logs.Entries = append(make([]Entry, 0, len(logs.Entries)), logs.Entries...) // some entry has been aborted, we must gc underling array
+	before := append(logs.Entries[:index-logs.Index0], entries...)
+	logLen := len(before)
+	newLog := make([]Entry, logLen)
+	copy(newLog, before)
+	logs.Entries = newLog
+
+	//logs.Entries = append(logs.Entries[:index-logs.Index0], entries...)
+	//logs.Entries = append(make([]Entry, 0, len(logs.Entries)), logs.Entries...) // some entry has been aborted, we must gc underling array
 }
 
 // EraseBefore erase the log entry before a specific index (not include index)
 func (logs *LogEntries) EraseBefore(index int) {
-	logs.Entries = logs.Entries[index-logs.Index0:]
-	logs.Entries = append(make([]Entry, 0, len(logs.Entries)), logs.Entries...) // some entry has been aborted, we must gc underling array
+
+	after := logs.Entries[index-logs.Index0:]
+	logLen := len(after)
+	newLog := make([]Entry, logLen)
+	copy(newLog, after)
+	logs.Entries = nil
+	logs.Entries = newLog
 	logs.Index0 = index
 }
 
 // EraseAfter erase the log entry after a specific index (include index)
 func (logs *LogEntries) EraseAfter(index int) {
-	logs.Entries = logs.Entries[:index-logs.Index0]
+	before := logs.Entries[index-logs.Index0:]
+	logLen := len(before)
+	newLog := make([]Entry, logLen)
+	copy(newLog, before)
+	logs.Entries = nil
+	logs.Entries = newLog
+}
+
+func (logs *LogEntries) GetLogLength() int {
+	return len(logs.Entries)
 }
 
 // makeLogEntriesEmpty Add a dummy entry

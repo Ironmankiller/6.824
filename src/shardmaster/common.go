@@ -34,6 +34,14 @@ func (c *Config) String() string {
 	return fmt.Sprintf("Num: %v Shards {%v} Groups {%v}", c.Num, c.Shards, c.Groups)
 }
 
+func DefaultConfig() Config {
+	return Config{
+		Num:    0,
+		Shards: [NShards]int{},
+		Groups: make(map[int][]string),
+	}
+}
+
 const (
 	OK             = "OK"
 	ErrNoConfig    = "ErrNoConfig"
@@ -69,5 +77,5 @@ type CommandReply struct {
 }
 
 func (c *CommandReply) String() string {
-	return fmt.Sprintf("Err: %v Config: %v", c.Err, c.Config)
+	return fmt.Sprintf("Err: %v Config: %v", c.Err, &c.Config)
 }
