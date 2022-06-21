@@ -13,25 +13,17 @@ import "sync"
 import "ds/labgob"
 
 const (
-	RaftWaitTime = 1300 // ms
+	RaftWaitTime = 500 // ms
 
-	NeedSnapshotDetectInterval = 50
-
-	ConfigurationDetectInterval    = 50 // ms
-	MigrateShardDetectInterval     = 80
-	GarbageCleanDetectInterval     = 100
+	ConfigurationDetectInterval    = 100 // ms
+	MigrateShardDetectInterval     = 50
+	GarbageCleanDetectInterval     = 50
 	CurrentTermEntryDetectInterval = 300
 )
 
 type CommandContext struct {
 	CommandId int
 	LastReply CommandReply
-}
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
 }
 
 type ShardKV struct {
@@ -59,32 +51,11 @@ type ShardKV struct {
 func (kv *ShardKV) Kill() {
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	if kv.needSnapshot() {
-		DPrintf("[S%v][G%v]: needSnapshot", kv.me, kv.gid)
-		kv.mu.Lock()
-		lastApplied := kv.lastApplied
-		kv.mu.Unlock()
-		kv.snapshot(lastApplied)
-	}
 }
 
 func (kv *ShardKV) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
-}
-
-func (kv *ShardKV) snapshotDetect(timeout int) {
-	for kv.killed() == false {
-		// Check whether persisted Raft state grows too large
-		if kv.needSnapshot() {
-			DPrintf("[S%v][G%v]: WeneedSnapshot", kv.me, kv.gid)
-			kv.mu.Lock()
-			lastApplied := kv.lastApplied
-			kv.mu.Unlock()
-			kv.snapshot(lastApplied)
-		}
-		time.Sleep(time.Duration(timeout) * time.Millisecond)
-	}
 }
 
 func (kv *ShardKV) applier() {
@@ -594,7 +565,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.applySnapshot(persister.ReadSnapshot())
 	DPrintf("[S%v][G%v]: state machine restore", kv.me, kv.rf.GetGid())
 	go kv.applier()
-	//go kv.snapshotDetect(NeedSnapshotDetectInterval)
 
 	go kv.leaderTaskTread(kv.configurationTask, ConfigurationDetectInterval)
 	go kv.leaderTaskTread(kv.migrateShardTask, MigrateShardDetectInterval)

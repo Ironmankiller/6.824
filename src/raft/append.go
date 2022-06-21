@@ -93,7 +93,8 @@ func (rf *Raft) AppendRequest(args *AppendEntriesArgs, reply *AppendEntriesReply
 				break
 			}
 		}
-		DPrintf("[S%v][G%v]: lastIndex %v now %v\n", rf.me, rf.Gid, rf.log.LastIndex(), rf.log)
+		//DPrintf("[S%v][G%v]: lastIndex %v now %v\n", rf.me, rf.Gid, rf.log.LastIndex(), rf.log)
+		DPrintf("[S%v][G%v]: lastIndex %v\n", rf.me, rf.Gid, rf.log.LastIndex())
 		rf.advanceCommit(args.LeaderCommit)
 		reply.Success = true
 	}

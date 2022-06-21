@@ -198,21 +198,20 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	labgob.Register(CommandArgs{})
 	labgob.Register(MemConfig{})
 
+	applyCh := make(chan raft.ApplyMsg)
+
 	sm := &ShardMaster{
 		me:           me,
+		rf:           raft.Make(servers, me, persister, applyCh),
 		configs:      make([]Config, 1),
+		applyCh:      applyCh,
 		lastApplied:  0,
 		stateMachine: NewMemConfig(),
 		notifier:     make(map[int]chan *CommandReply),
 		lastResult:   make(map[int64]CommandContext),
 	}
-
 	sm.configs[0].Groups = map[int][]string{}
 
-	sm.applyCh = make(chan raft.ApplyMsg)
-	sm.rf = raft.Make(servers, me, persister, sm.applyCh)
-
 	go sm.applier()
-
 	return sm
 }
